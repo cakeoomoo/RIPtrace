@@ -10,11 +10,11 @@ All Usage:
  ./RIPtrace --help                : show help
 
 
+
 Demo:  
 
-![](https://media.giphy.com/media/vFKqnCdLPNOKc/giphy.gif)
+![](https://github.com/cakeoomoo/RIPtrace/blob/master/demo.gif)
 
-![](http://i.imgur.com/60bts.gif)
 
 
 All program have a IP(intruction pointer) otherwise PC(program counter) that the runnning process indicate at the next.
