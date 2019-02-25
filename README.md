@@ -1,15 +1,17 @@
 # RIPtrace
 
-TIPtrace is a very simple RIP(64bit instruction pointer) tracer of CLI tool in less than 0.5-kilo lines of code, And does not depend on other library.
+RIPtrace is a very SIMPLE RIP(Instruction pointer) tracer of CLI tool in less than 0.5-kilo lines of code, And does not depend on other library.
 
 ## Usage
 
 ```
 ./RIPtrace --trace [exec-file]
-./RIPtrace --check [log-filename
+./RIPtrace --check [log-filename]
 ```
   
-##Demo:  
+
+ 
+##Demo
 
 ![](https://github.com/cakeoomoo/RIPtrace/blob/master/demo.gif)
 
