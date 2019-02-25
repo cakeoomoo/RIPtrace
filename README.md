@@ -5,10 +5,10 @@ RIPtrace is a very SIMPLE RIP(Instruction pointer) tracer of CLI tool in less th
 ## Usage
 
 ```bash
-./RIPtrace -t [exec-file] "--trace
-./RIPtrace -c [log-filename] "--check
-./RIPtrace -a [PID] [breakpoint-address] "--attach
-./RIPtrace -h "--help
+./RIPtrace -t [exec-file]
+./RIPtrace -c [log-filename]
+./RIPtrace -a [PID] [breakpoint-address]
+./RIPtrace -h
 ```
   
 

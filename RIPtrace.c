@@ -44,6 +44,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <elf.h>        
+#include <math.h>
 
 /* print color character at stdout. */
 #define beRED(string) "\x1B[0;31m" string "\x1B[0m"
@@ -104,11 +105,6 @@ typedef struct status_file {
     char logfilename[LOGFILE_NAME_BUF];
 } status_file;
 status_file GV_tracer_info;
-
-
-
-
-
 /* ------------------------------------------------------------------------- */
 
 
@@ -192,7 +188,7 @@ char * input_string_simple (char * text_msg, int check_except_lf){
 }
 
 char * input_string_simple_more (char * text_msg, int check_except_lf){
-    char *line = (char*)malloc(GREP_CMD_TEXT_SIZE);
+    char *line = NULL;
     size_t len = 0;
 
     printf(beGRN("\n%s"), text_msg);
@@ -266,27 +262,7 @@ int make_new_logfile() {
     return 0;
 }
 
-int append_logfile(const char * restrict w_strings) {
-    FILE * fp;
-
-    /*  for logfile    */
-    static long count = 0;
-    count++;
-
-    fp = fopen(GV_tracer_info.logfilename, "a");
-    if (fp == NULL) {
-        puts(beRED("file not created...")"\n");
-        return 1;
-    }
-
-    /* write(append) string  */
-    fprintf(fp, "%ld: %s\n", count, w_strings); 
-
-    fclose(fp);
-    return 0;
-}
-
-int append_logfile_ver2(const char * w_strings) {
+int append_logfile(const char * w_strings) {
     FILE * fp;
     fp = fopen(GV_tracer_info.logfilename, "a");
 
@@ -321,30 +297,16 @@ long convertNum_endian(long input) {
     return out;
 }
 
-void ps_continue_stop_by_status(pid_t pid) {
-    int status = 0;
-
-    /* only continuing process */
-    ptrace(PTRACE_CONT, pid, NULL, NULL);
-    debug_printf("Continuing.\n");
-
-    /*  get pid status  */
-    waitpid(pid, &status, 0);
-
-    //status check (exit routine)
-    if (WIFEXITED(status)) {
-        debug_printf("Program exited normally.\n");
-        debug_printf("status: %d",status);
-        exit(0);
-    }
-    //status check (breakpoint routine)
-    if (WIFSTOPPED(status))
-        debug_printf("Breakpoint.\n");
-    else
-        exit(1);
+int convertNum_endian_32bit(int input) {
+    int out = 0;
+    out += (input & 0x000000ff) << (3*8);
+    out += (input & 0x0000ff00) << (1*8);
+    out += (input & 0x00ff0000) >> (1*8);
+    out += (input & 0xff000000) >> (3*8);
+    return out;
 }
 
-int ps_continue_stop_by_status_ver2(pid_t pid) {
+int ps_continue_stop_by_status(pid_t pid) {
     int status = 0;
 
     /* only continuing process */
@@ -452,7 +414,7 @@ long read_elfheader(const char* elfFilename){
 
     if(file) {
         fread(&tracee_elfheader, 1, sizeof(tracee_elfheader), file);
-
+     
         if (memcmp(tracee_elfheader.e_ident, ELFMAG, SELFMAG) == 0) {
             return_value = 1;
         }
@@ -474,6 +436,9 @@ int call_trace_rip(int argc, char ** argv,char ** envp) {
     long original_text;
     long next_text;
     void * next_addr;
+    unsigned long countloop = 0;
+    char temp_str[OUTPUT_STR_BUF];
+    memset(temp_str, 0, OUTPUT_STR_BUF); 
 
     debug_printf(beRED("argv[0]:%s\nargv[1]:%s\nargv[2]:%s\nargv[3]:%s\n"),argv[0],argv[1],argv[2],argv[3]);
 
@@ -495,19 +460,44 @@ int call_trace_rip(int argc, char ** argv,char ** envp) {
     /* process attach  */
     ps_attach(pid);
 
-    /* 
-    *   main loop routine 
-    */
+
+    /* make buffer */
+    char * out_string = (char*)calloc(MALLOC_SIZE_BUF_BEFORE_WRITE, sizeof(char)); 
+    if(out_string == NULL){
+        fprintf(stderr,"Error: malloc()");      
+        exit(1);
+    }
     debug_printf(beBLU("-----auto record RIP-----"));
     while(1){
         /* set break point */
         original_text = ps_set_breakpoint_for_addrOfpid(pid, addr);
 
         /* continue and stop routine */   
-        ps_continue_stop_by_status(pid);
+        if(ps_continue_stop_by_status(pid) != 0){
+            append_logfile(out_string);
+            free(out_string);
+            printf(beGRN("\nFinish!\n Search: [ %s --check %s ]\n"), GV_tracer_info.tracerfilename, GV_tracer_info.logfilename);
+            /* need not to dettach to process if process will be exit. */
+            exit(1);
+        }
+
 
         /* delete breakpint instruction(0xCC) and switch original address */   
         ps_deleteBP_switch_original(pid, addr, original_text);
+
+       if( strlen(out_string) > (MALLOC_SIZE_BUF_BEFORE_WRITE-BUF_THRESHOLD_BEFORE_WRITE)) {
+            /*  except '\n' at last elements  */
+            int i = 1;
+            while(out_string[i]!='\0')
+                i++;
+            out_string[i-1] = '\0';
+
+            append_logfile(out_string);
+            memset(out_string, 0, MALLOC_SIZE_BUF_BEFORE_WRITE); 
+
+            if ( (countloop%100) == 1)
+                printf(beGRN("|"));
+        }
 
         /* step run */
         ps_stepi(pid);
@@ -520,60 +510,94 @@ int call_trace_rip(int argc, char ** argv,char ** envp) {
 
 
         /*  write down  */
-        char out_string[OUTPUT_STR_BUF];
-        //printf("%d",addr);
         debug_printf("------------next addr =  %p\n", addr);
-        sprintf(out_string, "%p", addr);
         debug_printf("out_string = %s\n", out_string);
-        append_logfile(out_string);
 
-        
+        snprintf(temp_str, sizeof(temp_str), "%ld: %p\n", countloop, addr); 
+        strncat(out_string, temp_str, sizeof(temp_str));
+
         /* get next text */
         next_text = get_next_text(pid, next_addr);
         debug_printf("next_text:%lx(hex)\n",convertNum_endian(next_text));
+
+        countloop++;
     }
 
     /* process dettach  */
+    free(out_string);
     ps_dettach(pid);
-    puts("exit routine");
+
     return 0;
 }
 
 
+/*  Error: return -1 
+    not error:return converted number
+    I cannot use atoi fucntion becuase of my study  */
+long str2hex(const char *text) {
+    /*  check Error except hex digi
+            0~9(ascii) => 0~9(dicimal)
+            a~f(ascii) => 10~15
+            A~F(ascii) => 10~15         */
+    long hex = 0;
+    int ajust_digit = strlen(text) - 1;
+    long temp_t = 0;
+    long temp_hex = 0;
+    for(int i = 0;text[i] != '\0';i++){
+        temp_t = text[i]; 
 
-
-
-/* 
- *  1. grep rip address from traceRIP.log
- */
-int call_check_rip(int argc, char ** argv, char ** envp) {
-
-    const char * filename = argv[1];
-
-    /* check record RIP  */
-    debug_printf(beBLU("-----check record RIP-----"));
-    debug_printf(beRED("argv[0]:%s\nargv[1]:%s\nargv[2]:%s\nargv[3]:%s\n"),argv[0],argv[1],argv[2],argv[3]);
-
-    char * input_text = input_string_simple_more("Address >>>", 0);
-
-    if(input_text[0] == '\0') {
-        printf(beRED("ERROR: input is empty!\n"));
-        return 0;
+        /* convert only hex number  */
+        if((0x30 <= temp_t) && (temp_t <= 0x39))
+            temp_t = temp_t - 0x30;
+        else if((0x41 <= temp_t) && (temp_t <= 0x5a))
+            temp_t = temp_t - 0x37;
+        else if((0x61 <= temp_t) && (temp_t < 0x7a))
+            temp_t = temp_t - 0x57;
+        else 
+            return -1;/* Error: not ascii*/
+        /* calulate for each digit */
+        if (ajust_digit == 0)
+            temp_hex = temp_t;
+        else {
+            temp_hex = temp_t << (4*ajust_digit); //means * (2**4 = 16) 
+            ajust_digit--;
+        }
+        hex = hex + temp_hex; 
     }
- 
+    return hex;
+}
+
+/*  1. grep rip address from traceRIP.log */
+int call_check_rip(int argc, char ** argv, char ** envp) {
+    debug_printf(beRED("argv[0]:%s\nargv[1]:%s\nargv[2]:%s\nargv[3]:%s\n"),argv[0],argv[1],argv[2],argv[3]);
+    const char * filename = argv[1];
     char cmd_text[GREP_CMD_TEXT_SIZE];
 
-    snprintf(cmd_text, sizeof(cmd_text), "grep %s %s", input_text, filename);
-    debug_printf("cmd_text = %s\n",cmd_text);
+    char * input_address = input_string_simple_more("Address >>> 0x", 0);
+    if(input_address[0] == '\0') {
+        fprintf(stderr, beRED("ERROR: input is empty!\n"));
+        return 0;
+    }
+    char * input_offset = input_string_simple_more("Offset address or 0 >> +0x", 0);
+    if(input_offset[0] == '\0') {
+        fprintf(stderr, beRED("ERROR: input is empty!\n"));
+        return 0;
+    }
+    long hex_address = str2hex(input_address);
+    long hex_offset = str2hex(input_offset);
+    long hex_address_new = hex_address + hex_offset;
+     
+    snprintf(cmd_text, sizeof(cmd_text), "grep 0x%lx %s", hex_address_new, filename);
+    printf("cmd_text = %s\n",cmd_text);
     
-    printf(beGRN("\n------------------- result -------------------\n"));
+    free(input_address);
+    free(input_offset);
+
+    fprintf(stdout,beGRN("------------------- result -------------------\n"));
     call_pipe(cmd_text);
 
-    free(input_text);
-    
     return 0;
 }
-
 
 
 
@@ -601,88 +625,7 @@ int func_hook(pid_t pid) {
     return 0;
 }
 
-
 int parent_main_tracer(const char *filename, char ** argv, int child_pid) {
-    
-    int status = 0;
-    void * addr = NULL;
-    char out_string[COMMAND_LENGTH];
-    long original_text = 0;
-    long next_text = 0;
-    void * next_addr = NULL;
-    pid_t child = 0;
-
-    /*  elf header information into global struct.
-        ,So after this function call, It can use elf header information. */
-    if(read_elfheader(filename) == 0){
-        fprintf(stderr,"Error: do not access elf-file");
-        exit(1);
-    }
-    GV_tracee_status.entry_p = tracee_elfheader.e_entry;
-    GV_tracee_status.bit = tracee_elfheader.e_ident[4];
-
-    debug_printf(beRED("directry child_bit:%d\n"), GV_tracee_status.bit);
-
-
-    addr = (void*)GV_tracee_status.entry_p;
-    if(addr == NULL){
-        fprintf(stderr,"Error: addr is wrong.\n");
-        return 1;
-    }
-    /* out stirngs is initialize  */
-    memset( &out_string[0] , 0x00 , sizeof(out_string));
-
-
-
-    /* 
-     *   same as  int call_trace_rip without routine of getting child process ID.
-     */
-    /* error check  */
-    child = waitpid(-1, &status, WUNTRACED | WCONTINUED);
-    debug_printf(beRED("child = %d\n"),child);
-    if (child == -1) {
-        perror("waitpid");
-        return 1;
-    }
-    make_new_logfile();
-
-
-    debug_printf(beBLU("-----auto record RIP-----"));
-    while(1){
-
-        /* set break point */
-        original_text = ps_set_breakpoint_for_addrOfpid(child, addr);
-
-        /* continue and stop routine */   
-        ps_continue_stop_by_status(child);
-
-        /* delete breakpint instruction(0xCC) and switch original address */   
-        ps_deleteBP_switch_original(child, addr, original_text);
-
-        /* step run */
-        ps_stepi(child);
-        
-        /* get next rip address */
-        next_addr = (void*)get_next_rip_address(child);
-        debug_printf("next addr = %p\n", next_addr);
-        addr = next_addr;
-
-
-        /*  write down  */
-        snprintf(out_string, sizeof(out_string),"%p", addr);
-        debug_printf("out_string = %s\n", out_string);
-        append_logfile(out_string);
-
-        
-        /* get next text */
-        next_text = get_next_text(child, next_addr);
-        debug_printf("next_text:%lx(hex)\n",convertNum_endian(next_text));
-    }
-
-    return 0;
-}
-
-int parent_main_tracer_ver2(const char *filename, char ** argv, int child_pid) {
     
     int status = 0;
     void * addr = NULL;
@@ -698,27 +641,27 @@ int parent_main_tracer_ver2(const char *filename, char ** argv, int child_pid) {
 
     /*  elf header information into global struct.
         ,So after this function call, It can use elf header information. */
-    if(read_elfheader(filename) == 0){
-        fprintf(stderr,"Error: do not access elf-file");
+    if(read_elfheader(filename) == 0) {
+        fprintf(stderr, beRED("Error: do not access elf-file"));
         exit(1);
     }
     GV_tracee_status.entry_p = tracee_elfheader.e_entry;
     GV_tracee_status.bit = tracee_elfheader.e_ident[GET_ELFFILE_BIT];
 
     debug_printf(beRED("directry child_bit:%d\n"), GV_tracee_status.bit);
-
+    if(GV_tracee_status.bit == BIT32) {
+        fprintf(stderr, beRED("Error: The tracee program is 32bit ELF binary."));
+        exit(1);
+    }
 
     addr = (void*)GV_tracee_status.entry_p;
-    if(addr == NULL){
-        fprintf(stderr,"Error: addr is wrong.\n");
+    if(addr == NULL) {
+        fprintf(stderr, beRED("Error: addr is wrong.\n"));
         return 1;
     }
 
 
-    /* 
-     *   same as  int call_trace_rip without routine of getting child process ID.
-     */
-    /* error check  */
+    /* same as call_trace_rip without routine of getting child process ID. error check  */
     child = waitpid(-1, &status, WUNTRACED | WCONTINUED);
     debug_printf(beRED("child = %d\n"),child);
     if (child == -1) {
@@ -730,30 +673,26 @@ int parent_main_tracer_ver2(const char *filename, char ** argv, int child_pid) {
 
     /* make buffer */
     char * out_string2 = (char*)calloc(MALLOC_SIZE_BUF_BEFORE_WRITE, sizeof(char)); 
-    if(out_string2 == NULL){
+    if(out_string2 == NULL) {
         fprintf(stderr,"Error: malloc()");      
         exit(1);
     }
 
     debug_printf(beBLU("-----auto record RIP-----"));
-    while(1){
-
+    while(1) {
         /* set break point */
         original_text = ps_set_breakpoint_for_addrOfpid(child, addr);
 
         /* continue and stop routine */   
-        if(ps_continue_stop_by_status_ver2(child) != 0){
-            append_logfile_ver2(out_string2);
+        if(ps_continue_stop_by_status(child) != 0){
+            append_logfile(out_string2);
             free(out_string2);
             printf(beGRN("\nFinish!\n Search: [ %s --check %s ]\n"), GV_tracer_info.tracerfilename, GV_tracer_info.logfilename);
             exit(1);
         }
-   
 
         /* delete breakpint instruction(0xCC) and switch original address */   
         ps_deleteBP_switch_original(child, addr, original_text);
-
-
 
         if( strlen(out_string2) > (MALLOC_SIZE_BUF_BEFORE_WRITE-BUF_THRESHOLD_BEFORE_WRITE)) {
         
@@ -763,7 +702,7 @@ int parent_main_tracer_ver2(const char *filename, char ** argv, int child_pid) {
                 i++;
             out_string2[i-1] = '\0';
 
-            append_logfile_ver2(out_string2);
+            append_logfile(out_string2);
             memset(out_string2, 0, MALLOC_SIZE_BUF_BEFORE_WRITE); 
 
             if ( (countloop%100) == 1)
@@ -821,7 +760,7 @@ void call_fork(int argc, char ** argv, char ** envp){
 
     int pid = fork();
     if (pid) {
-        parent_main_tracer_ver2(filename, &argv[1], pid);
+        parent_main_tracer(filename, &argv[1], pid);
     } else {
         debug_printf("child proces ID is %d", getpid()); /* why does not it run? */
         child_main(filename, &argv[1]);
@@ -831,20 +770,20 @@ void call_fork(int argc, char ** argv, char ** envp){
 
 void usage(char * cmd) {
     fprintf(stderr, beGRN("Usage: \n"));
-    fprintf(stderr, beGRN(" %s --help                : show help\n"), cmd);
-    //fprintf(stderr, beGRN(" %s --attach [pid] [addr] : attach\n"), cmd);
-    fprintf(stderr, beGRN(" %s --check [log-file]    : check rip\n"), cmd);
-    fprintf(stderr, beGRN(" %s --trace [exec-file]   : trace exec\n"), cmd);
+    fprintf(stderr, beGRN(" %s -h, --help                : show help\n"), cmd);
+    fprintf(stderr, beGRN(" %s -a, --attach [pid] [addr] : attach\n"), cmd);
+    fprintf(stderr, beGRN(" %s -c, --check [log-file]    : check rip\n"), cmd);
+    fprintf(stderr, beGRN(" %s -t, --trace [exec-file]   : trace exec\n"), cmd);
 }
 
 int main(int argc, char ** argv, char ** envp) {
 
     strncpy(GV_tracer_info.tracerfilename, argv[0], TRACERFILE_NAME_BUF);
-    debug_printf("GV_tracer_info.tracerfilename:%s\n",GV_tracer_info.tracerfilename);
+    debug_printf("GV_tracer_info.tracerfilename:%s\n", GV_tracer_info.tracerfilename);
 
     /* purse argument for option  */
     struct option long_options[] = {
-        //{"attach", 0, NULL, 'a'},
+        {"attach", 0, NULL, 'a'},
         {"check", 0, NULL, 'c'},
         {"trace", 0, NULL, 't'},
         {"help", 0, NULL, 'h'},
@@ -853,7 +792,7 @@ int main(int argc, char ** argv, char ** envp) {
     int option_index = 0;
     char opt = getopt_long(argc, argv, "acth", long_options, &option_index);
 
-    debug_printf(beRED("opt is %d\nargv[0]:%s\nargv[1]:%s\nargv[2]:%s\nargv[3]:%s\n"), opt,argv[0],argv[1],argv[2],argv[3]);
+    debug_printf(beRED("opt:%d\nargv[0]:%s\n[1]:%s\n[2]:%s\n[3]:%s\n"),opt,argv[0],argv[1],argv[2],argv[3]);
 
     switch(opt) {
         case 'a':
