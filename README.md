@@ -4,9 +4,11 @@ RIPtrace is a very SIMPLE RIP(Instruction pointer) tracer of CLI tool in less th
 
 ## Usage
 
-```
-./RIPtrace --trace [exec-file]
-./RIPtrace --check [log-filename]
+```bash
+./RIPtrace -t [exec-file] "--trace
+./RIPtrace -c [log-filename] "--check
+./RIPtrace -a [PID] [breakpoint-address] "--attach
+./RIPtrace -h "--help
 ```
   
 
@@ -29,7 +31,7 @@ All runnning process have a IP(intruction pointer) otherwise PC(program counter)
 RIPtracer can record all RIP(64bit) of the process from entry-point to exit-point and can out the logfile on the linux machine.
   
 In addition to reacording, It can search RIP, So You can check the program-flow of your program with some reversing tool like objdump or IDA.
-However, It still does not attach and dettach to runnning process:)
+And, It can attach and trace for running process on the linux.
   
 
 ## LICENSE
